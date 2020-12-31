@@ -27,6 +27,7 @@ class MatchError(ValueError):
             self,
             message: Optional[str] = None,
             linenumber: int = 0,
+            column: Optional[int] = None,
             details: str = "",
             filename: Optional[str] = None,
             rule: BaseRule = RuntimeErrorRule(),
@@ -43,6 +44,7 @@ class MatchError(ValueError):
 
         self.message = message or getattr(rule, 'shortdesc', "")
         self.linenumber = linenumber
+        self.column = column
         self.details = details
         if filename:
             self.filename = normpath(filename)

@@ -21,7 +21,7 @@ ROLE_0_ERRORS = '''
   become_user: somebody
 '''
 
-PLAY_4_ERRORS = '''
+PLAY_5_ERRORS = '''
 - hosts: all
   sudo: yes
   sudo_user: somebody
@@ -59,9 +59,9 @@ class TestSudoRule(unittest.TestCase):
         self.assertEqual(0, len(results))
 
     def test_play_root_and_task_fail(self):
-        results = self.runner.run_playbook(PLAY_4_ERRORS)
-        self.assertEqual(4, len(results))
+        results = self.runner.run_playbook(PLAY_5_ERRORS)
+        self.assertEqual(5, len(results))
 
     def test_play_task_fail(self):
         results = self.runner.run_playbook(PLAY_1_ERROR)
-        self.assertEqual(1, len(results))
+        self.assertEqual(2, len(results))  # current rule plus 911

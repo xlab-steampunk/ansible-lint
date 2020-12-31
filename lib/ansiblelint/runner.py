@@ -1,17 +1,27 @@
 """Runner implementation."""
 import logging
 import os
+import re
+import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, FrozenSet, Generator, List, Optional, Set
 
 import ansiblelint.file_utils
 import ansiblelint.skip_utils
-import ansiblelint.utils
-from ansiblelint._internal.rules import LoadingFailureRule
+from ansiblelint._internal.rules import BaseRule, LoadingFailureRule, RuntimeErrorRule
 from ansiblelint.errors import MatchError
+from ansiblelint.rules.AnsibleSyntaxCheckRule import AnsibleSyntaxCheckRule
+from ansiblelint.text import strip_ansi_escape
+from ansiblelint.utils import find_children
 
 if TYPE_CHECKING:
     from ansiblelint.rules import RulesCollection
+
+    # https://github.com/PyCQA/pylint/issues/3240
+    # pylint: disable=unsubscriptable-object
+    CompletedProcess = subprocess.CompletedProcess[Any]
+else:
+    CompletedProcess = subprocess.CompletedProcess
 
 
 _logger = logging.getLogger(__name__)
@@ -27,6 +37,11 @@ class LintResult:
 
 class Runner(object):
     """Runner class performs the linting process."""
+
+    _ansible_syntax_check_re = re.compile(
+        r"^ERROR! (?P<title>[^\n]*)\n\nThe error appears to be in "
+        r"'(?P<filename>.*)': line (?P<line>\d+), column (?P<column>\d+)",
+        re.MULTILINE | re.S | re.DOTALL)
 
     def __init__(
             self,
@@ -100,6 +115,27 @@ class Runner(object):
                 "Examining %s of type %s",
                 ansiblelint.file_utils.normpath(file['path']),
                 file['type'])
+
+            # we should bother checking playbooks only if they pass Ansible syntax-check
+            if file['type'] == 'playbook':
+                result = subprocess.run(
+                    ['ansible-playbook', '--syntax-check', file['path']],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    shell=False,  # needed when command is a list
+                    universal_newlines=True,
+                    check=False
+                )
+                if result.returncode != 0:
+
+                    matches = matches.union(
+                        self._parse_ansible_syntax_check(result))
+                    # continue
+                    # For the moment we do not jump at next file, but in the
+                    # future we would likely want to avoid running internal
+                    # parsing if ansible-check fails.
+
             matches = matches.union(
                 self.rules.run(file, tags=set(self.tags),
                                skip_list=self.skip_list))
@@ -113,7 +149,7 @@ class Runner(object):
         while visited != self.playbooks:
             for arg in self.playbooks - visited:
                 try:
-                    for child in ansiblelint.utils.find_children(arg, self.playbook_dir):
+                    for child in find_children(arg, self.playbook_dir):
                         if self.is_excluded(child['path']):
                             continue
                         self.playbooks.add((child['path'], child['type']))
@@ -122,3 +158,49 @@ class Runner(object):
                     e.rule = LoadingFailureRule()
                     yield e
                 visited.add(arg)
+
+    @staticmethod
+    def _parse_ansible_syntax_check(run: CompletedProcess) -> List[MatchError]:
+        """Convert ansible syntax check output into a list of MatchError(s)."""
+        result = []
+        if run.returncode != 0:
+            message = None
+            filename = None
+            linenumber = 0
+            column = None
+
+            stderr = strip_ansi_escape(run.stderr)
+            stdout = strip_ansi_escape(run.stdout)
+            if stderr:
+                details = stderr
+                if stdout:
+                    details += "\n" + stdout
+            else:
+                details = stdout
+
+            m = Runner._ansible_syntax_check_re.search(stderr)
+            if m:
+                message = m.groupdict()['title']
+                # Ansible returns absolute paths
+                filename = m.groupdict()['filename']
+                linenumber = int(m.groupdict()['line'])
+                column = int(m.groupdict()['column'])
+
+            if run.returncode == 4:
+                rule: BaseRule = AnsibleSyntaxCheckRule()
+            else:
+                rule = RuntimeErrorRule()
+                if not message:
+                    message = (
+                        "Ansible --syntax-check reported unexpected "
+                        f"error code {run.returncode}")
+
+            result.append(MatchError(
+                message=message,
+                filename=filename,
+                linenumber=linenumber,
+                column=column,
+                rule=rule,
+                details=details
+                ))
+        return result

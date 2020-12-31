@@ -29,7 +29,7 @@ def test_roles_local_content_failure(default_rules_collection):
     results = runner.run()
 
     assert len(runner.playbooks) == 4
-    assert len(results) == 0
+    assert len(results) == 1  # syntax-check reports one
 
 
 def test_roles_local_content_failure_complete(default_rules_collection):
@@ -37,5 +37,5 @@ def test_roles_local_content_failure_complete(default_rules_collection):
     playbook_path = 'test/local-content/test-roles-failed-complete/test.yml'
     runner = Runner(default_rules_collection, playbook_path, [], [], [])
     x = runner.run()
-    assert len(x) == 1
+    assert len(x) == 2  # also catched by syntax-check
     assert "couldn't resolve module" in x[0].message
